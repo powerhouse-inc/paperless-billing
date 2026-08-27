@@ -1,0 +1,270 @@
+# Paperless-ngx -> Powerhouse billing demo, entirely in Docker.
+#
+#   ./start.sh                    # the one command
+#   docker compose logs -f switchboard
+#   docker compose down           # stop (add -v to wipe Paperless + reactor data)
+#
+# Drop a PDF containing the word "invoice" into Paperless and it lands in the
+# Billing drive as a powerhouse/invoice document, fields extracted by an LLM.
+#
+# PDF ONLY. Office/email ingestion (tika + gotenberg) and layout-aware parsing
+# (docling) are commented out below -- they add ~7.6 GB of images for paths this
+# demo never takes. Uncomment if you need them.
+#
+# Nothing runs on the host, so there is no host.docker.internal anywhere: every
+# hop is container-to-container over Compose's default network, addressed by
+# service name.
+
+name: paperless-billing
+
+services:
+  # Paperless's celery broker. NOT optional -- document consumption (OCR) runs
+  # in a worker fed by Redis, so webserver will not start without it.
+  broker:
+    image: docker.io/library/redis:7
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  webserver:
+    image: ghcr.io/paperless-ngx/paperless-ngx:3.0.5
+    restart: unless-stopped
+    depends_on:
+      broker:
+        condition: service_healthy
+      # Only needed for Office/email ingestion -- see the commented services.
+      # gotenberg:
+      #   condition: service_started
+      # tika:
+      #   condition: service_started
+    ports:
+      # Configurable so this can run alongside another Paperless:
+      #   PAPERLESS_HOST_PORT=8010 ./start.sh
+      - "${PAPERLESS_HOST_PORT:-8000}:8000"
+    volumes:
+      - data:/usr/src/paperless/data
+      - media:/usr/src/paperless/media
+      - ./.local/consume:/usr/src/paperless/consume
+    environment:
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_URL: http://localhost:${PAPERLESS_HOST_PORT:-8000}
+      PAPERLESS_TIME_ZONE: Europe/Berlin
+      # German first. With "eng" alone, tesseract mangles every diacritic
+      # (K6nigsberg, fiir, MusterstraBe) and feeds the corrupted text straight
+      # to the extraction LLM. The order also drives the stemmer and date parser.
+      PAPERLESS_OCR_LANGUAGE: deu+eng
+      PAPERLESS_DATE_PARSER_LANGUAGES: de+en
+      # PDF-only demo. Set to "true" and uncomment tika + gotenberg (service and
+      # depends_on) to accept .docx/.xlsx/.odt/.eml -- without BOTH running,
+      # Paperless refuses those formats outright at ingestion.
+      PAPERLESS_TIKA_ENABLED: "false"
+      # PAPERLESS_TIKA_ENDPOINT: http://tika:9998
+      # PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
+      # Dev-only credentials; the superuser is created on first start.
+      PAPERLESS_ADMIN_USER: admin
+      PAPERLESS_ADMIN_PASSWORD: paperless
+      PAPERLESS_SECRET_KEY: local-development-only-not-a-secret
+      # ImageMagick defaults to unlimited memory, the documented route to
+      # "unable to extend pixel cache" and an OOM-killed container.
+      PAPERLESS_CONVERT_MEMORY_LIMIT: "1024"
+      PAPERLESS_WORKER_TIMEOUT: "3600"
+      # Paperless's own AI only suggests titles/tags and truncates content to
+      # 4000 chars; invoice field extraction is paperless-sync's job entirely.
+      PAPERLESS_AI_ENABLED: "false"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/"]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+
+  # The reactor. Runs on its built-in PGlite storage -- no postgres service and
+  # no DATABASE_URL, so reactor + read model use directories under /app/.ph and
+  # migrations run automatically at startup.
+  switchboard:
+    # MUST match the reactor line the packages were built against. billing and
+    # paperless-sync target 6.2.2-dev.53; :latest is 6.2.2's predecessor 6.2.1,
+    # which does not define the AttachmentRef GraphQL type that billing's
+    # subgraph references. One unknown type fails composition for EVERY subgraph
+    # (including core ones like analytics and document-drive), the gateway ends
+    # up with no query root, and switchboard crash-loops on startup.
+    # :dev is currently 6.2.2-dev.62.
+    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-dev}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SWITCHBOARD_HOST_PORT:-4001}:3000"
+    volumes:
+      # Persists .ph/reactor-storage and .ph/read-storage (WORKDIR is /app).
+      - switchboard_pglite:/app/.ph
+    environment:
+      # Installed by the entrypoint at every container start, BY TARBALL URL --
+      # deliberately not `name@version`.
+      #
+      # The @powerhousedao scope is split across two registries: billing and
+      # paperless-sync exist ONLY on registry.dev.vetra.io, while the versions
+      # switchboard itself pins (e.g. analytics-engine-core@6.2.2-dev.53) exist
+      # ONLY on npmjs -- vetra's copy of that scope stops at 6.2.2-dev.7. So a
+      # scope redirect breaks whichever half it points away from, and there is
+      # no per-package registry in npm/pnpm. A tarball URL sidesteps the
+      # question entirely and works the same in npm, pnpm, bun and yarn.
+      #
+      # (Setting npm_config_registry does NOT work here: pnpm 11 ignores
+      # npm_config_* env vars for the registry -- verified in the container,
+      # `pnpm config get registry` still reported registry.npmjs.org.)
+      #
+      # billing is NOT listed: paperless-sync depends on it by tarball URL, so
+      # it installs alongside at the version paperless-sync was tested against.
+      # That URL subdependency is why pnpm-workspace.yaml is mounted below.
+      # PH_PACKAGES only INSTALLS. Loading is a SEPARATE mechanism: the
+      # reactor's package manager reads PH_REGISTRY_PACKAGES (+ PH_REGISTRY_URL,
+      # falling back to powerhouse.config.json packageRegistryUrl). With
+      # PH_PACKAGES alone the log reads
+      #   [reactor-api][package-manager] Loading packages: , /app
+      # -- an empty list -- and neither the invoice document model nor the
+      # paperless-webhook subgraph is ever registered, so the drive stays empty.
+      # These take package NAMES, not URLs.
+      - PH_REGISTRY_URL=https://registry.dev.vetra.io
+      # Pinned. The loader passes this straight into the CDN path
+      # (<cdn>/<name[@version]>/browser/index.js), which serves versioned specs
+      # -- verified. Bare names would silently follow dist-tags.latest, so a
+      # registry publish could change what this demo runs without a code change.
+      - PH_REGISTRY_PACKAGES=@powerhousedao/paperless-sync@${PAPERLESS_SYNC_VERSION:-0.2.4},@powerhousedao/billing@${BILLING_VERSION:-0.0.3}
+      # ---- paperless-sync configuration (read by the processor at startup) ----
+      - PAPERLESS_AI_BASE_URL=${PAPERLESS_AI_BASE_URL:-https://openrouter.ai/api/v1}
+      - PAPERLESS_AI_MODEL=${PAPERLESS_AI_MODEL:-openai/gpt-oss-120b}
+      - PAPERLESS_AI_API_KEY=${PAPERLESS_AI_API_KEY}
+      - PAPERLESS_WEBHOOK_SECRET=${PAPERLESS_WEBHOOK_SECRET:-local-dev-webhook-secret-not-for-production}
+      # The URL Paperless is told to call. Paperless is a container on this same
+      # network, so this is an in-network hop -- NOT host.docker.internal.
+      - PAPERLESS_SUBGRAPH_URL=http://switchboard:3000/graphql/paperless-webhook
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/health"]
+      interval: 10s
+      timeout: 3s
+      # The PH_PACKAGES install runs BEFORE the server starts listening: ~15 MB
+      # of tarballs plus dependency resolution on a cold pnpm store. The upstream
+      # example's 30s is not enough and makes the container look unhealthy while
+      # it is simply still installing.
+      start_period: 240s
+      retries: 5
+
+  connect:
+    # Same reactor line as switchboard -- Connect loads the same packages.
+    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-dev}
+    restart: unless-stopped
+    depends_on:
+      switchboard:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${CONNECT_HOST_PORT:-3000}:3001"
+    environment:
+      # Deep-merged into the image's powerhouse.config.json (operator wins).
+      # - defaultDrives must be a DRIVE url as the BROWSER sees it (host port),
+      #   not as containers see it, and not the switchboard root: / answers 404,
+      #   /d/billing answers 200. The upstream pglite example uses the bare root,
+      #   which makes Connect log "Default drive ... not reachable" three times
+      #   and give up. "billing" is the slug scripts/bootstrap.py creates.
+      # - packageRegistryUrl + packages make Connect load the billing editors at
+      #   runtime from the registry CDN; env vars are not otherwise a source for
+      #   Connect's config, so this JSON is the only lever.
+      - 'PH_CONNECT_CONFIG_JSON={"packageRegistryUrl":"https://registry.dev.vetra.io","packages":[{"packageName":"@powerhousedao/billing","provider":"registry","version":"${BILLING_VERSION:-0.0.3}"},{"packageName":"@powerhousedao/paperless-sync","provider":"registry","version":"${PAPERLESS_SYNC_VERSION:-0.2.4}"}],"connect":{"drives":{"defaultDrives":[{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/billing","name":null,"icon":null}]}}}'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3001/health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 5
+
+  # One-shot wiring, idempotent -- every step checks before it writes, so it is
+  # safe on every `up`. Creates the Paperless "Invoice" type, the Billing drive,
+  # the "Paperless Connection" sync document, and the Invoice -> invoice mapping.
+  # Secrets are NOT its business: credentials, AI config and the webhook secret
+  # are bootstrapped by the processor from switchboard's environment.
+  #
+  # A normal service (not a profile) gated on both dependencies being healthy,
+  # which is what lets `docker compose up -d --wait` be the whole command --
+  # --wait also waits for one-shot containers to exit successfully.
+  bootstrap:
+    image: docker.io/library/python:3.13-alpine
+    restart: "no"
+    depends_on:
+      webserver:
+        condition: service_healthy
+      switchboard:
+        condition: service_healthy
+    volumes:
+      - ./scripts/bootstrap.py:/bootstrap.py:ro
+    environment:
+      BOOTSTRAP_PAPERLESS_URL: http://webserver:8000
+      BOOTSTRAP_REACTOR_URL: http://switchboard:3000
+      # What gets written into the sync document as Paperless's address -- as
+      # seen from the REACTOR, which is now a container. Not localhost.
+      BOOTSTRAP_PAPERLESS_URL_FROM_REACTOR: http://webserver:8000
+      BOOTSTRAP_SUBGRAPH_URL: http://switchboard:3000/graphql/paperless-webhook
+      PAPERLESS_ADMIN_USER: admin
+      PAPERLESS_ADMIN_PASSWORD: paperless
+    command: ["python3", "/bootstrap.py"]
+
+  # ---------------------------------------------------------------------------
+  # Optional services, commented out to keep the first pull at ~2.6 GB instead
+  # of ~10.2 GB. Uncomment the service AND its webserver wiring above.
+  # ---------------------------------------------------------------------------
+
+  # Renders Office documents to PDF (1.68 GB). Needed together with tika for
+  # .docx/.xlsx/.odt/.eml -- Paperless gatekeeps those formats at ingestion, so
+  # neither one alone is any use.
+  # gotenberg:
+  #   image: docker.io/gotenberg/gotenberg:8
+  #   restart: unless-stopped
+  #   # Upstream Paperless guidance: no JS, Chromium restricted to local files.
+  #   command:
+  #     - gotenberg
+  #     - "--chromium-disable-javascript=true"
+  #     - "--chromium-allow-list=file:///tmp/.*"
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 30
+
+  # Extracts text from Office formats (843 MB).
+  #
+  # MUST be 3.x, NOT 4.x: Paperless calls /tika/form/text via tika-client and
+  # Tika 4.0.0 answers 404, so .docx fails to consume with exactly that error.
+  # Do not "upgrade" it.
+  # tika:
+  #   image: docker.io/apache/tika:3.3.1.0-full
+  #   restart: unless-stopped
+  #   # No healthcheck: the image ships neither curl nor wget, so an HTTP probe
+  #   # fails forever and would block webserver indefinitely.
+
+  # Layout-aware parsing, tables stay tables (5.1 GB image, ~800 MB RAM).
+  # Dormant unless PAPERLESS_DOCLING_URL is set on switchboard, and adoption is
+  # still gated on a measured comparison -- it also strips page headers and
+  # footers, which loses invoice numbers on some layouts. To try it: uncomment,
+  # then add PAPERLESS_DOCLING_URL=http://docling:5001 to switchboard.
+  # docling:
+  #   image: quay.io/docling-project/docling-serve-cpu:v1.31.0
+  #   restart: unless-stopped
+  #   environment:
+  #     DOCLING_SERVE_ENABLE_UI: "false"
+  #     DOCLING_SERVE_LOAD_MODELS_AT_BOOT: "true"
+  #     DOCLING_SERVE_ARTIFACTS_PATH: /opt/app-root/src/.cache/docling/models
+  #   volumes:
+  #     - doclingmodels:/opt/app-root/src/.cache/docling
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-fsS", "http://localhost:5001/health"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 60
+
+volumes:
+  data:
+  media:
+  redisdata:
+  switchboard_pglite:
+  # doclingmodels:

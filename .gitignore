@@ -1,0 +1,5 @@
+# Holds PAPERLESS_AI_API_KEY. Never commit it.
+.env
+
+# Paperless's watched folder -- documents you drop in for ingestion.
+.local/
