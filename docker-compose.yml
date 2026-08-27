@@ -94,6 +94,14 @@ services:
     # up with no query root, and switchboard crash-loops on startup.
     # :dev is currently 6.2.2-dev.62.
     image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-dev}
+    # These images are published for linux/amd64 ONLY -- every tag, checked
+    # 2026-08-27. On Apple Silicon the pull fails outright with
+    #   no matching manifest for linux/arm64/v8 in the manifest list entries
+    # so ask for amd64 explicitly and let Docker emulate. No cost on amd64
+    # hosts, where this is already native. Enable Rosetta in Docker Desktop
+    # (Settings -> General) to make the emulation tolerable on a Mac.
+    # Remove once upstream publishes multi-arch images.
+    platform: linux/amd64
     restart: unless-stopped
     ports:
       - "127.0.0.1:${SWITCHBOARD_HOST_PORT:-4001}:3000"
@@ -155,6 +163,7 @@ services:
   connect:
     # Same reactor line as switchboard -- Connect loads the same packages.
     image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-dev}
+    platform: linux/amd64   # amd64-only upstream; see switchboard above
     restart: unless-stopped
     depends_on:
       switchboard:

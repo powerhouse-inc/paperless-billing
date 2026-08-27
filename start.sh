@@ -85,6 +85,16 @@ mkdir -p .local/consume
 # exited successfully, so when this returns the stack is genuinely wired.
 # First run pulls ~2.6 GB and installs the packages into switchboard; allow it
 # several minutes before assuming something is wrong.
+# switchboard and connect are published for linux/amd64 only, so on Apple
+# Silicon they run emulated (see platform: in docker-compose.yml). With Rosetta
+# that is merely slower; on QEMU it is slower still and occasionally flaky.
+if [ "$OS" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+  echo "==> Apple Silicon: switchboard and connect run emulated (amd64-only upstream)."
+  echo "    Faster with Rosetta: Docker Desktop -> Settings -> General ->"
+  echo "    \"Use Rosetta for x86_64/amd64 emulation\". Without it, QEMU is used;"
+  echo "    it works, just slower."
+fi
+
 echo "==> Starting the stack (first run pulls ~2.6 GB and installs packages)"
 if ! docker compose up -d --wait 2>/tmp/ph-up.err; then
   cat /tmp/ph-up.err >&2
