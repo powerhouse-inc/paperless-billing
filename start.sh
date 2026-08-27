@@ -85,18 +85,13 @@ mkdir -p .local/consume
 # exited successfully, so when this returns the stack is genuinely wired.
 # First run pulls ~2.6 GB and installs the packages into switchboard; allow it
 # several minutes before assuming something is wrong.
-# switchboard and connect are published for linux/amd64 only, so on Apple
-# Silicon they run emulated (see platform: in docker-compose.yml). With Rosetta
-# that is merely slower; on QEMU it is slower still and occasionally flaky.
-if [ "$OS" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
-  echo "==> Apple Silicon: switchboard and connect run emulated (amd64-only upstream)."
-  echo "    Faster with Rosetta: Docker Desktop -> Settings -> General ->"
-  echo "    \"Use Rosetta for x86_64/amd64 emulation\". Without it, QEMU is used;"
-  echo "    it works, just slower."
-fi
+echo "==> Starting the stack (first run pulls ~2.6 GB, then Paperless migrates)"
 
-echo "==> Starting the stack (first run pulls ~2.6 GB and installs packages)"
-if ! docker compose up -d --wait 2>/tmp/ph-up.err; then
+# Deliberately NOT `up --wait`: it goes quiet for minutes while switchboard's
+# start_period elapses and Paperless runs its migrations, which reads as a
+# hang. Plain `up -d` keeps compose's own pull/create progress, then we do the
+# waiting ourselves so we can show what is still pending, and for how long.
+if ! docker compose up -d 2>/tmp/ph-up.err; then
   cat /tmp/ph-up.err >&2
   if grep -q "ports are not available" /tmp/ph-up.err; then
     cat >&2 <<EOF
@@ -122,6 +117,91 @@ EOF
   fi
   exit 1
 fi
+
+# --- wait for everything, with visible progress ------------------------------
+# Same bar `--wait` sets -- every healthchecked service healthy, the one-shot
+# bootstrap exited -- but narrated, so a long start does not look like a hang.
+wait_deadline=$(( $(date +%s) + 900 ))
+spin='|/-\'
+spin_i=0
+wait_started=$(date +%s)
+
+# Only animate on a real terminal. Piped to a file or CI log, \r does not
+# overwrite and a spinner becomes tens of thousands of useless lines, so print a
+# plain line every 15s instead.
+if [ -t 1 ]; then interactive=1; else interactive=0; fi
+last_report=0
+
+while :; do
+  pending=""
+  missing=""
+  for svc in broker webserver switchboard connect; do
+    line=$(docker compose ps -a --format '{{.State}}|{{.Health}}' "$svc" 2>/dev/null | head -1)
+    if [ -z "$line" ]; then
+      # No container at all: `up -d` never created it. Waiting cannot fix that.
+      missing="$missing $svc"
+    else
+      case "$line" in
+        *"|healthy") ;;
+        *) pending="$pending $svc" ;;
+      esac
+    fi
+  done
+  bs=$(docker compose ps -a --format '{{.State}}' bootstrap 2>/dev/null | head -1)
+  if [ -z "$bs" ]; then
+    missing="$missing bootstrap"
+  else
+    case "$bs" in
+      exited | *Exit*) ;;
+      *) pending="$pending bootstrap" ;;
+    esac
+  fi
+
+  if [ -n "$missing" ]; then
+    [ "$interactive" = 1 ] && printf '\r%*s\r' 78 ''
+    echo "ERROR: these services have no container:$missing"
+    echo "  'docker compose up -d' did not create them. Check:"
+    echo "    docker compose ps -a"
+    echo "    docker compose logs --tail=50"
+    exit 1
+  fi
+
+  [ -z "$pending" ] && break
+
+  elapsed=$(( $(date +%s) - wait_started ))
+
+  if [ "$(date +%s)" -ge "$wait_deadline" ]; then
+    [ "$interactive" = 1 ] && printf '\r%*s\r' 78 ''
+    echo "Still not ready after 15 minutes. Pending:$pending"
+    echo "  docker compose ps"
+    echo "  docker compose logs --tail=50$pending"
+    exit 1
+  fi
+
+  if [ "$interactive" = 1 ]; then
+    spin_i=$(( (spin_i + 1) % 4 ))
+    printf '\r  [%s] %4ds  waiting for:%s ' \
+      "$(printf '%s' "$spin" | cut -c$((spin_i + 1)))" \
+      "$elapsed" "$pending"
+  elif [ $(( elapsed - last_report )) -ge 15 ]; then
+    echo "  ${elapsed}s  waiting for:$pending"
+    last_report=$elapsed
+  fi
+  sleep 1
+done
+[ "$interactive" = 1 ] && printf '\r%*s\r' 78 ''
+echo "==> All services ready in $(( $(date +%s) - wait_started ))s"
+
+# The bootstrap must have SUCCEEDED, not merely finished.
+bs_id=$(docker compose ps -aq bootstrap 2>/dev/null | head -1)
+bs_code=$(docker inspect "$bs_id" --format '{{.State.ExitCode}}' 2>/dev/null || echo "?")
+if [ "$bs_code" != "0" ]; then
+  echo
+  echo "ERROR: the Paperless <-> reactor wiring failed (bootstrap exit $bs_code)."
+  echo "  docker compose logs bootstrap"
+  exit 1
+fi
+
 
 # --- assert the reactor actually loaded the packages -----------------------
 # Packages are loaded from the registry CDN at startup (PH_REGISTRY_PACKAGES),
