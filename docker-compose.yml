@@ -140,7 +140,7 @@ services:
       # (<cdn>/<name[@version]>/browser/index.js), which serves versioned specs
       # -- verified. Bare names would silently follow dist-tags.latest, so a
       # registry publish could change what this demo runs without a code change.
-      - PH_REGISTRY_PACKAGES=@powerhousedao/paperless-sync@${PAPERLESS_SYNC_VERSION:-0.2.6},@powerhousedao/billing@${BILLING_VERSION:-0.0.3}
+      - PH_REGISTRY_PACKAGES=@powerhousedao/paperless-sync@${PAPERLESS_SYNC_VERSION:-0.2.7},@powerhousedao/billing@${BILLING_VERSION:-0.0.3}
       # ---- paperless-sync configuration (read by the processor at startup) ----
       - PAPERLESS_AI_BASE_URL=${PAPERLESS_AI_BASE_URL:-https://openrouter.ai/api/v1}
       - PAPERLESS_AI_MODEL=${PAPERLESS_AI_MODEL:-openai/gpt-oss-120b}
@@ -180,7 +180,7 @@ services:
       # - packageRegistryUrl + packages make Connect load the billing editors at
       #   runtime from the registry CDN; env vars are not otherwise a source for
       #   Connect's config, so this JSON is the only lever.
-      - 'PH_CONNECT_CONFIG_JSON={"packageRegistryUrl":"https://registry.dev.vetra.io","packages":[{"packageName":"@powerhousedao/billing","provider":"registry","version":"${BILLING_VERSION:-0.0.3}"},{"packageName":"@powerhousedao/paperless-sync","provider":"registry","version":"${PAPERLESS_SYNC_VERSION:-0.2.6}"}],"connect":{"drives":{"defaultDrives":[{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/billing","name":null,"icon":null}]}}}'
+      - 'PH_CONNECT_CONFIG_JSON={"packageRegistryUrl":"https://registry.dev.vetra.io","packages":[{"packageName":"@powerhousedao/billing","provider":"registry","version":"${BILLING_VERSION:-0.0.3}"},{"packageName":"@powerhousedao/paperless-sync","provider":"registry","version":"${PAPERLESS_SYNC_VERSION:-0.2.7}"}],"connect":{"drives":{"defaultDrives":[{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/billing","name":null,"icon":null}]}}}'
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3001/health"]
       interval: 10s

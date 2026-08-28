@@ -3,3 +3,4 @@
 
 # Paperless's watched folder -- documents you drop in for ingestion.
 .local/
+.env.backup-*
