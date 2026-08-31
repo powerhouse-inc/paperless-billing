@@ -92,8 +92,11 @@ services:
     # subgraph references. One unknown type fails composition for EVERY subgraph
     # (including core ones like analytics and document-drive), the gateway ends
     # up with no query root, and switchboard crash-loops on startup.
-    # :dev is currently 6.2.2-dev.62.
-    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-dev}
+    # Default is PINNED, not :dev -- :dev is a MOVING tag (it happened to equal
+    # v6.2.2-dev.68 when this was written, verified by identical manifest
+    # digest, but it advances on the next dev publish). Tags here are
+    # v-PREFIXED; a bare 6.2.2-dev.68 fails with "artifact not found".
+    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-v6.2.2-dev.68}
     # These images are published for linux/amd64 ONLY -- every tag, checked
     # 2026-08-27. On Apple Silicon the pull fails outright with
     #   no matching manifest for linux/arm64/v8 in the manifest list entries
@@ -105,9 +108,17 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${SWITCHBOARD_HOST_PORT:-4001}:3000"
+    # TEMPORARY: patches a broken @apollo/subgraph in the image before handing
+    # off to the real entrypoint. Without it EVERY graphql subgraph is dropped,
+    # the supergraph has no query root, /graphql 404s and bootstrap fails --
+    # while /health still answers, so the container looks healthy. See the
+    # script header. Remove both lines (and the script) once the image is newer
+    # than v6.2.2-dev.68, which carries the upstream fix.
+    entrypoint: ["/bin/sh", "/patch-apollo-subgraph.sh"]
     volumes:
       # Persists .ph/reactor-storage and .ph/read-storage (WORKDIR is /app).
       - switchboard_pglite:/app/.ph
+      - ./scripts/patch-apollo-subgraph.sh:/patch-apollo-subgraph.sh:ro
     environment:
       # Installed by the entrypoint at every container start, BY TARBALL URL --
       # deliberately not `name@version`.
@@ -140,7 +151,7 @@ services:
       # (<cdn>/<name[@version]>/browser/index.js), which serves versioned specs
       # -- verified. Bare names would silently follow dist-tags.latest, so a
       # registry publish could change what this demo runs without a code change.
-      - PH_REGISTRY_PACKAGES=@powerhousedao/paperless-sync@${PAPERLESS_SYNC_VERSION:-0.2.7},@powerhousedao/billing@${BILLING_VERSION:-0.0.3}
+      - PH_REGISTRY_PACKAGES=@powerhousedao/paperless-sync@${PAPERLESS_SYNC_VERSION:-0.2.8},@powerhousedao/billing@${BILLING_VERSION:-0.0.4}
       # ---- paperless-sync configuration (read by the processor at startup) ----
       - PAPERLESS_AI_BASE_URL=${PAPERLESS_AI_BASE_URL:-https://openrouter.ai/api/v1}
       - PAPERLESS_AI_MODEL=${PAPERLESS_AI_MODEL:-openai/gpt-oss-120b}
@@ -162,7 +173,7 @@ services:
 
   connect:
     # Same reactor line as switchboard -- Connect loads the same packages.
-    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-dev}
+    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-v6.2.2-dev.68}
     platform: linux/amd64   # amd64-only upstream; see switchboard above
     restart: unless-stopped
     depends_on:
@@ -180,7 +191,7 @@ services:
       # - packageRegistryUrl + packages make Connect load the billing editors at
       #   runtime from the registry CDN; env vars are not otherwise a source for
       #   Connect's config, so this JSON is the only lever.
-      - 'PH_CONNECT_CONFIG_JSON={"packageRegistryUrl":"https://registry.dev.vetra.io","packages":[{"packageName":"@powerhousedao/billing","provider":"registry","version":"${BILLING_VERSION:-0.0.3}"},{"packageName":"@powerhousedao/paperless-sync","provider":"registry","version":"${PAPERLESS_SYNC_VERSION:-0.2.7}"}],"connect":{"drives":{"defaultDrives":[{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/billing","name":null,"icon":null}]}}}'
+      - 'PH_CONNECT_CONFIG_JSON={"packageRegistryUrl":"https://registry.dev.vetra.io","packages":[{"packageName":"@powerhousedao/billing","provider":"registry","version":"${BILLING_VERSION:-0.0.4}"},{"packageName":"@powerhousedao/paperless-sync","provider":"registry","version":"${PAPERLESS_SYNC_VERSION:-0.2.8}"}],"connect":{"drives":{"defaultDrives":[{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/billing","name":null,"icon":null}]}}}'
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3001/health"]
       interval: 10s

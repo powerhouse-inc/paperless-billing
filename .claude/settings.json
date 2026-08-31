@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo \"--- ss done \\(rc=$?\\) ---\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-NetTCPConnection -LocalPort 4001 -ErrorAction SilentlyContinue | Select-Object -First 5 LocalAddress,LocalPort,State,OwningProcess | Format-Table -AutoSize\")",
+      "Bash(powershell.exe -NoProfile -Command 'Get-NetTCPConnection -LocalPort 4001 -ErrorAction SilentlyContinue | ForEach-Object { Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue } | Select-Object -Unique Id,ProcessName,Path | Format-Table -AutoSize')",
+      "Bash(powershell.exe -NoProfile -Command 'Get-CimInstance Win32_Service | Where-Object {$_.ProcessId -eq 4428} | Select-Object Name,DisplayName,State,StartMode | Format-Table -AutoSize')",
+      "Bash(tasklist.exe /svc /fi \"PID eq 4428\")",
+      "Bash(netsh.exe int *)",
+      "Bash(netsh.exe interface *)",
+      "Bash(netstat.exe -ano -p tcp)",
+      "Bash(ip -4 addr show eth0)",
+      "Bash(ip -4 addr show)",
+      "Bash(powershell.exe -NoProfile -Command \"Get-Process -Id 37308 -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,Path | Format-List\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-ItemProperty -Path 'HKLM:\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\PortProxy\\\\v4tov4\\\\tcp' -ErrorAction SilentlyContinue | Select-Object * -Exclude PS* | Format-List\")",
+      "Bash(wsl.exe --version)",
+      "Bash(powershell.exe -NoProfile -Command 'if \\(Test-Path $env:USERPROFILE\\\\.wslconfig\\) { Get-Content $env:USERPROFILE\\\\.wslconfig } else { '\\\\''NO .wslconfig -- all defaults in effect'\\\\'' }')",
+      "Bash(nohup python3 -m http.server 4111 --bind 0.0.0.0)",
+      "Bash(nohup python3 -m http.server 4112 --bind 127.0.0.1)",
+      "Bash(powershell.exe -NoProfile -Command 'try { \\(Invoke-WebRequest -Uri '\\\\''http://localhost:4111'\\\\'' -TimeoutSec 4 -UseBasicParsing\\).StatusCode } catch { '\\\\''FAILED: '\\\\'' + $_.Exception.Message }')",
+      "Bash(powershell.exe -NoProfile -Command 'try { \\(Invoke-WebRequest -Uri '\\\\''http://localhost:4112'\\\\'' -TimeoutSec 4 -UseBasicParsing\\).StatusCode } catch { '\\\\''FAILED: '\\\\'' + $_.Exception.Message }')",
+      "Bash(powershell.exe -NoProfile -Command 'foreach \\($p in 4111,4112\\) { try { $r=Invoke-WebRequest \"http://localhost:$p\" -TimeoutSec 4 -UseBasicParsing; \"$p -> \" + $r.Headers['\\\\''Server'\\\\''] } catch { \"$p -> FAILED\" } }')",
+      "Bash(powershell.exe -NoProfile -Command \"Get-Process -Id 14880 -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,Path | Format-List\")",
+      "Bash(pkill -f \"http.server 4111\")",
+      "Bash(pkill -f \"http.server 4112\")",
+      "Bash(pkill -f \"4112\")"
+    ]
+  }
+}
