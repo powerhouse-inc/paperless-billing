@@ -80,18 +80,16 @@ fi
 
 mkdir -p .local/consume
 
-# --- bring everything up ------------------------------------------------------
-# --wait blocks until every service is healthy AND the one-shot bootstrap has
-# exited successfully, so when this returns the stack is genuinely wired.
-# First run pulls ~2.6 GB and installs the packages into switchboard; allow it
-# several minutes before assuming something is wrong.
-echo "==> Starting the stack (first run pulls ~2.6 GB, then Paperless migrates)"
+# --- bring long-running services up ------------------------------------------
+# Bootstrap is a one-shot that depends_on Paperless + reactor being healthy.
+# `docker compose up -d` (and `up --wait`) honor that by blocking with no
+# further output until those healthchecks pass -- which reads as a hang while
+# Docker already shows the other containers. Start only the long-running
+# services, skip depends_on waits (--no-deps), narrate health ourselves, then
+# run bootstrap once they are actually up.
+echo "==> Starting Paperless, reactor, and Connect (first run pulls ~2.6 GB, then Paperless migrates)"
 
-# Deliberately NOT `up --wait`: it goes quiet for minutes while switchboard's
-# start_period elapses and Paperless runs its migrations, which reads as a
-# hang. Plain `up -d` keeps compose's own pull/create progress, then we do the
-# waiting ourselves so we can show what is still pending, and for how long.
-if ! docker compose up -d 2>/tmp/ph-up.err; then
+if ! docker compose up -d --no-deps broker webserver switchboard connect 2>/tmp/ph-up.err; then
   cat /tmp/ph-up.err >&2
   if grep -q "ports are not available" /tmp/ph-up.err; then
     cat >&2 <<EOF
@@ -118,9 +116,25 @@ EOF
   exit 1
 fi
 
-# --- wait for everything, with visible progress ------------------------------
-# Same bar `--wait` sets -- every healthchecked service healthy, the one-shot
-# bootstrap exited -- but narrated, so a long start does not look like a hang.
+svc_label() {
+  case "$1" in
+    broker) printf 'Redis' ;;
+    webserver) printf 'Paperless' ;;
+    switchboard) printf 'reactor' ;;
+    connect) printf 'Connect' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# First line only; never fail the script on SIGPIPE if compose prints extra.
+ps_state_health() {
+  local out
+  out=$(docker compose ps -a --format '{{.State}}|{{.Health}}' "$1" 2>/dev/null || true)
+  printf '%s' "${out%%$'\n'*}"
+}
+
+# --- wait for health, with visible progress ----------------------------------
+echo "==> Waiting for services to become healthy"
 wait_deadline=$(( $(date +%s) + 900 ))
 spin='|/-\'
 spin_i=0
@@ -136,29 +150,19 @@ while :; do
   pending=""
   missing=""
   for svc in broker webserver switchboard connect; do
-    line=$(docker compose ps -a --format '{{.State}}|{{.Health}}' "$svc" 2>/dev/null | head -1)
+    line=$(ps_state_health "$svc")
     if [ -z "$line" ]; then
-      # No container at all: `up -d` never created it. Waiting cannot fix that.
-      missing="$missing $svc"
+      missing="$missing $(svc_label "$svc")"
     else
       case "$line" in
-        *"|healthy") ;;
-        *) pending="$pending $svc" ;;
+        *'|healthy') ;;
+        *) pending="$pending $(svc_label "$svc")" ;;
       esac
     fi
   done
-  bs=$(docker compose ps -a --format '{{.State}}' bootstrap 2>/dev/null | head -1)
-  if [ -z "$bs" ]; then
-    missing="$missing bootstrap"
-  else
-    case "$bs" in
-      exited | *Exit*) ;;
-      *) pending="$pending bootstrap" ;;
-    esac
-  fi
 
   if [ -n "$missing" ]; then
-    [ "$interactive" = 1 ] && printf '\r%*s\r' 78 ''
+    [ "$interactive" = 1 ] && printf '\r%*s\r' 100 ''
     echo "ERROR: these services have no container:$missing"
     echo "  'docker compose up -d' did not create them. Check:"
     echo "    docker compose ps -a"
@@ -171,35 +175,64 @@ while :; do
   elapsed=$(( $(date +%s) - wait_started ))
 
   if [ "$(date +%s)" -ge "$wait_deadline" ]; then
-    [ "$interactive" = 1 ] && printf '\r%*s\r' 78 ''
-    echo "Still not ready after 15 minutes. Pending:$pending"
-    echo "  docker compose ps"
-    echo "  docker compose logs --tail=50$pending"
+    [ "$interactive" = 1 ] && printf '\r%*s\r' 100 ''
+    echo "Still not healthy after 15 minutes. Waiting on:$pending"
+    echo "  docker compose ps -a"
+    echo "  docker compose logs --tail=50"
     exit 1
   fi
 
   if [ "$interactive" = 1 ]; then
     spin_i=$(( (spin_i + 1) % 4 ))
-    printf '\r  [%s] %4ds  waiting for:%s ' \
+    printf '\r  [%s] %4ds  waiting for:%s to become healthy ' \
       "$(printf '%s' "$spin" | cut -c$((spin_i + 1)))" \
       "$elapsed" "$pending"
   elif [ $(( elapsed - last_report )) -ge 15 ]; then
-    echo "  ${elapsed}s  waiting for:$pending"
+    echo "  ${elapsed}s  waiting for:$pending to become healthy"
     last_report=$elapsed
   fi
   sleep 1
 done
-[ "$interactive" = 1 ] && printf '\r%*s\r' 78 ''
-echo "==> All services ready in $(( $(date +%s) - wait_started ))s"
+[ "$interactive" = 1 ] && printf '\r%*s\r' 100 ''
+echo "==> Paperless, reactor, and Connect are healthy ($(( $(date +%s) - wait_started ))s)"
 
-# The bootstrap must have SUCCEEDED, not merely finished.
-bs_id=$(docker compose ps -aq bootstrap 2>/dev/null | head -1)
-bs_code=$(docker inspect "$bs_id" --format '{{.State.ExitCode}}' 2>/dev/null || echo "?")
-if [ "$bs_code" != "0" ]; then
-  echo
-  echo "ERROR: the Paperless <-> reactor wiring failed (bootstrap exit $bs_code)."
-  echo "  docker compose logs bootstrap"
-  exit 1
+# --- wire Paperless to the reactor -------------------------------------------
+# Run only now that deps are healthy. `run --no-deps` starts immediately and
+# streams [bootstrap] logs; `up -d` would recreate the Created/exited one-shot
+# and wait without output. --rm so a leftover container cannot mask a new run.
+# Cap the wait: bootstrap itself gives up after ~7 minutes of probes.
+#
+# Skip when a sync document already exists: re-running createDocument is not
+# fully idempotent (a second "Billing" drive can appear). After `down -v` the
+# reactor is empty and this probe is 0, so a fresh start still wires.
+wired=$(curl -sS --max-time 15 -X POST -H 'content-type: application/json' \
+  -d '{"query":"{ PaperlessSync { documents { totalCount } } }"}' \
+  "http://localhost:${SWITCHBOARD_PORT}/graphql" 2>/dev/null || true)
+if printf '%s' "$wired" | grep -Eq '"totalCount": *[1-9]'; then
+  echo "==> Wiring already present, skipping bootstrap"
+else
+  echo "==> Wiring Paperless to the reactor"
+  set +e
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --foreground 600 docker compose run --rm --no-deps bootstrap
+    bs_code=$?
+  else
+    docker compose run --rm --no-deps bootstrap
+    bs_code=$?
+  fi
+  set -e
+  if [ "$bs_code" -eq 124 ]; then
+    echo
+    echo "ERROR: bootstrap did not finish within 10 minutes."
+    echo "  docker compose logs --tail=50 webserver switchboard"
+    exit 1
+  fi
+  if [ "$bs_code" != "0" ]; then
+    echo
+    echo "ERROR: the Paperless <-> reactor wiring failed (bootstrap exit $bs_code)."
+    exit 1
+  fi
+  echo "==> Wiring complete"
 fi
 
 
@@ -235,11 +268,13 @@ fi
 
 # --- browser ------------------------------------------------------------------
 open_url() {
+  # Background the non-mac openers: xdg-open/wslview can block until the
+  # browser exits, which looks like the script hung after the stack is up.
   if command -v open >/dev/null 2>&1 && [ "$OS" = "Darwin" ]; then open "$1"
-  elif [ "$IS_WSL" = 1 ] && command -v wslview >/dev/null 2>&1; then wslview "$1"
+  elif [ "$IS_WSL" = 1 ] && command -v wslview >/dev/null 2>&1; then wslview "$1" >/dev/null 2>&1 &
   elif [ "$IS_WSL" = 1 ] && command -v powershell.exe >/dev/null 2>&1; then
-    powershell.exe -NoProfile -Command "Start-Process '$1'" >/dev/null 2>&1
-  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$1" >/dev/null 2>&1
+    powershell.exe -NoProfile -Command "Start-Process '$1'" >/dev/null 2>&1 &
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$1" >/dev/null 2>&1 &
   else echo "    (could not open a browser -- open $1 yourself)"; fi
 }
 echo "==> Opening Paperless ($PAPERLESS_UI_URL, admin/paperless) and Connect"
