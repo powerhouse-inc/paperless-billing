@@ -16,13 +16,12 @@ an LLM.
   | Linux    | [Docker Engine](https://docs.docker.com/engine/install/) + the Compose v2 plugin |
   | Windows  | [Docker Desktop](https://www.docker.com/products/docker-desktop/), WSL2 backend  |
 
-  **On macOS, prefer OrbStack.** Two reasons, both specific to this demo:
-  1. `switchboard` and `connect` are published for `linux/amd64` only, so on an
-    M-series Mac they run emulated — that's what the `platform:` pins in
-     [docker-compose.yml](docker-compose.yml) are for. OrbStack routes emulation
-     through Rosetta automatically. Docker Desktop needs Rosetta switched on by
-     hand — **Settings → General → "Use Rosetta for x86_64/amd64 emulation"** —
-     or it falls back to the much slower QEMU path.
+  `switchboard` and `connect` ship `linux/arm64` images, so they run natively on
+  Apple Silicon — no Rosetta or QEMU emulation, and no `platform:` pin needed.
+
+  **On macOS, OrbStack is still the easier option.** It installs no privileged
+  helper, so it cannot hit the macOS "Malware Blocked / com.docker.vmnetd" false
+  positive that leaves Docker Desktop unable to start.
 - Clone this repository
 
 ```bash

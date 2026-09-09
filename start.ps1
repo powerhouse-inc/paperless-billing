@@ -96,7 +96,7 @@ if (-not $ok) {
   Write-Host "    2. did supergraph composition fail?"
   Write-Host "         docker compose logs switchboard | Select-String 'Unknown type'"
   Write-Host "       That means PH_IMAGE_TAG does not match the reactor line the"
-  Write-Host "       packages were built against (billing targets 6.2.2-dev.53)."
+  Write-Host "       packages were built against."
   Write-Host "    3. is it crash-looping?"
   Write-Host "         docker inspect paperless-billing-switchboard-1 --format '{{.RestartCount}}'"
   exit 1

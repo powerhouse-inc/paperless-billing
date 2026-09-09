@@ -86,66 +86,34 @@ services:
   # no DATABASE_URL, so reactor + read model use directories under /app/.ph and
   # migrations run automatically at startup.
   switchboard:
-    # MUST match the reactor line the packages were built against. billing and
-    # paperless-sync target 6.2.2-dev.53; :latest is 6.2.2's predecessor 6.2.1,
-    # which does not define the AttachmentRef GraphQL type that billing's
-    # subgraph references. One unknown type fails composition for EVERY subgraph
-    # (including core ones like analytics and document-drive), the gateway ends
-    # up with no query root, and switchboard crash-loops on startup.
-    # Default is PINNED, not :dev -- :dev is a MOVING tag (it happened to equal
-    # v6.2.2-dev.68 when this was written, verified by identical manifest
-    # digest, but it advances on the next dev publish). Tags here are
-    # v-PREFIXED; a bare 6.2.2-dev.68 fails with "artifact not found".
-    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-v6.2.2-dev.68}
-    # These images are published for linux/amd64 ONLY -- every tag, checked
-    # 2026-08-27. On Apple Silicon the pull fails outright with
-    #   no matching manifest for linux/arm64/v8 in the manifest list entries
-    # so ask for amd64 explicitly and let Docker emulate. No cost on amd64
-    # hosts, where this is already native. Enable Rosetta in Docker Desktop
-    # (Settings -> General) to make the emulation tolerable on a Mac.
-    # Remove once upstream publishes multi-arch images.
-    platform: linux/amd64
+    # :latest is the production line -- 6.2.2 as of this writing. It defines the
+    # AttachmentRef GraphQL type that billing's subgraph references; 6.2.1 and
+    # earlier did not, and one unknown type fails supergraph composition for
+    # EVERY subgraph (including core ones like analytics and document-drive),
+    # leaving the gateway with no query root and switchboard crash-looping.
+    # Pin PH_IMAGE_TAG to a v-PREFIXED tag (e.g. v6.2.2) to hold a version; a
+    # bare 6.2.2 fails with "artifact not found".
+    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-latest}
     restart: unless-stopped
     ports:
       - "127.0.0.1:${SWITCHBOARD_HOST_PORT:-4001}:3000"
-    # TEMPORARY: patches a broken @apollo/subgraph in the image before handing
-    # off to the real entrypoint. Without it EVERY graphql subgraph is dropped,
-    # the supergraph has no query root, /graphql 404s and bootstrap fails --
-    # while /health still answers, so the container looks healthy. See the
-    # script header. Remove both lines (and the script) once the image is newer
-    # than v6.2.2-dev.68, which carries the upstream fix.
-    entrypoint: ["/bin/sh", "/patch-apollo-subgraph.sh"]
     volumes:
       # Persists .ph/reactor-storage and .ph/read-storage (WORKDIR is /app).
       - switchboard_pglite:/app/.ph
-      - ./scripts/patch-apollo-subgraph.sh:/patch-apollo-subgraph.sh:ro
     environment:
-      # Installed by the entrypoint at every container start, BY TARBALL URL --
-      # deliberately not `name@version`.
-      #
-      # The @powerhousedao scope is split across two registries: billing and
-      # paperless-sync exist ONLY on registry.dev.vetra.io, while the versions
-      # switchboard itself pins (e.g. analytics-engine-core@6.2.2-dev.53) exist
-      # ONLY on npmjs -- vetra's copy of that scope stops at 6.2.2-dev.7. So a
-      # scope redirect breaks whichever half it points away from, and there is
-      # no per-package registry in npm/pnpm. A tarball URL sidesteps the
-      # question entirely and works the same in npm, pnpm, bun and yarn.
-      #
-      # (Setting npm_config_registry does NOT work here: pnpm 11 ignores
-      # npm_config_* env vars for the registry -- verified in the container,
-      # `pnpm config get registry` still reported registry.npmjs.org.)
-      #
-      # billing is NOT listed: paperless-sync depends on it by tarball URL, so
-      # it installs alongside at the version paperless-sync was tested against.
-      # That URL subdependency is why pnpm-workspace.yaml is mounted below.
-      # PH_PACKAGES only INSTALLS. Loading is a SEPARATE mechanism: the
-      # reactor's package manager reads PH_REGISTRY_PACKAGES (+ PH_REGISTRY_URL,
-      # falling back to powerhouse.config.json packageRegistryUrl). With
-      # PH_PACKAGES alone the log reads
+      # The reactor's package manager loads these at startup from the registry
+      # CDN -- they are NOT installed into node_modules. It reads
+      # PH_REGISTRY_PACKAGES (+ PH_REGISTRY_URL, falling back to
+      # powerhouse.config.json packageRegistryUrl); both take package NAMES, not
+      # URLs. Without them the log reads
       #   [reactor-api][package-manager] Loading packages: , /app
       # -- an empty list -- and neither the invoice document model nor the
       # paperless-webhook subgraph is ever registered, so the drive stays empty.
-      # These take package NAMES, not URLs.
+      #
+      # STILL THE DEV REGISTRY: the image defaults to the production registry
+      # (https://registry.vetra.io), but billing and paperless-sync are only
+      # published to registry.dev.vetra.io -- the production registry answers 404
+      # for both. Drop this override once they are published to production.
       - PH_REGISTRY_URL=https://registry.dev.vetra.io
       # Pinned. The loader passes this straight into the CDN path
       # (<cdn>/<name[@version]>/browser/index.js), which serves versioned specs
@@ -164,17 +132,15 @@ services:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/health"]
       interval: 10s
       timeout: 3s
-      # The PH_PACKAGES install runs BEFORE the server starts listening: ~15 MB
-      # of tarballs plus dependency resolution on a cold pnpm store. The upstream
+      # Package loading runs BEFORE the server starts listening. The upstream
       # example's 30s is not enough and makes the container look unhealthy while
-      # it is simply still installing.
+      # it is simply still fetching from the registry CDN.
       start_period: 240s
       retries: 5
 
   connect:
     # Same reactor line as switchboard -- Connect loads the same packages.
-    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-v6.2.2-dev.68}
-    platform: linux/amd64   # amd64-only upstream; see switchboard above
+    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       switchboard:

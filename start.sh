@@ -55,16 +55,6 @@ Docker Desktop also works:
 
   brew install --cask docker-desktop && open -a Docker
 EOF
-    if [ "$(uname -m)" = "arm64" ]; then
-      cat >&2 <<'EOF'
-
-Apple Silicon: switchboard and connect are published for linux/amd64 only (see
-the platform: pins in docker-compose.yml), so they run emulated here. OrbStack
-routes that through Rosetta automatically. On Docker Desktop you must turn it on
-yourself, before the first run -- Settings -> General -> "Use Rosetta for
-x86_64/amd64 emulation" -- or it falls back to the much slower QEMU path.
-EOF
-    fi
     cat >&2 <<'EOF'
 
 OrbStack is free for personal use; commercial use needs a paid licence.
@@ -338,7 +328,7 @@ if ! curl -sS --max-time 15 -X POST -H 'content-type: application/json' \
   echo "    2. did supergraph composition fail?"
   echo "         docker compose logs switchboard | grep -i 'Unknown type'"
   echo "       That means PH_IMAGE_TAG does not match the reactor line the"
-  echo "       packages were built against (billing targets 6.2.2-dev.53)."
+  echo "       packages were built against."
   echo "    3. is it crash-looping?"
   echo "         docker inspect paperless-billing-switchboard-1 --format '{{.RestartCount}}'"
   exit 1
