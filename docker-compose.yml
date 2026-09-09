@@ -101,32 +101,19 @@ services:
       # Persists .ph/reactor-storage and .ph/read-storage (WORKDIR is /app).
       - switchboard_pglite:/app/.ph
     environment:
-      # Installed by the entrypoint at every container start, BY TARBALL URL --
-      # deliberately not `name@version`.
-      #
-      # The @powerhousedao scope is split across two registries: billing and
-      # paperless-sync exist ONLY on registry.dev.vetra.io, while the versions
-      # switchboard itself pins (e.g. analytics-engine-core@6.2.2-dev.53) exist
-      # ONLY on npmjs -- vetra's copy of that scope stops at 6.2.2-dev.7. So a
-      # scope redirect breaks whichever half it points away from, and there is
-      # no per-package registry in npm/pnpm. A tarball URL sidesteps the
-      # question entirely and works the same in npm, pnpm, bun and yarn.
-      #
-      # (Setting npm_config_registry does NOT work here: pnpm 11 ignores
-      # npm_config_* env vars for the registry -- verified in the container,
-      # `pnpm config get registry` still reported registry.npmjs.org.)
-      #
-      # billing is NOT listed: paperless-sync depends on it by tarball URL, so
-      # it installs alongside at the version paperless-sync was tested against.
-      # That URL subdependency is why pnpm-workspace.yaml is mounted below.
-      # PH_PACKAGES only INSTALLS. Loading is a SEPARATE mechanism: the
-      # reactor's package manager reads PH_REGISTRY_PACKAGES (+ PH_REGISTRY_URL,
-      # falling back to powerhouse.config.json packageRegistryUrl). With
-      # PH_PACKAGES alone the log reads
+      # The reactor's package manager loads these at startup from the registry
+      # CDN -- they are NOT installed into node_modules. It reads
+      # PH_REGISTRY_PACKAGES (+ PH_REGISTRY_URL, falling back to
+      # powerhouse.config.json packageRegistryUrl); both take package NAMES, not
+      # URLs. Without them the log reads
       #   [reactor-api][package-manager] Loading packages: , /app
       # -- an empty list -- and neither the invoice document model nor the
       # paperless-webhook subgraph is ever registered, so the drive stays empty.
-      # These take package NAMES, not URLs.
+      #
+      # STILL THE DEV REGISTRY: the image defaults to the production registry
+      # (https://registry.vetra.io), but billing and paperless-sync are only
+      # published to registry.dev.vetra.io -- the production registry answers 404
+      # for both. Drop this override once they are published to production.
       - PH_REGISTRY_URL=https://registry.dev.vetra.io
       # Pinned. The loader passes this straight into the CDN path
       # (<cdn>/<name[@version]>/browser/index.js), which serves versioned specs
@@ -145,10 +132,9 @@ services:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/health"]
       interval: 10s
       timeout: 3s
-      # The PH_PACKAGES install runs BEFORE the server starts listening: ~15 MB
-      # of tarballs plus dependency resolution on a cold pnpm store. The upstream
+      # Package loading runs BEFORE the server starts listening. The upstream
       # example's 30s is not enough and makes the container look unhealthy while
-      # it is simply still installing.
+      # it is simply still fetching from the registry CDN.
       start_period: 240s
       retries: 5
 
