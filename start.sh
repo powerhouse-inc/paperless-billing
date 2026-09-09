@@ -328,7 +328,7 @@ if ! curl -sS --max-time 15 -X POST -H 'content-type: application/json' \
   echo "    2. did supergraph composition fail?"
   echo "         docker compose logs switchboard | grep -i 'Unknown type'"
   echo "       That means PH_IMAGE_TAG does not match the reactor line the"
-  echo "       packages were built against (billing targets 6.2.2-dev.53)."
+  echo "       packages were built against."
   echo "    3. is it crash-looping?"
   echo "         docker inspect paperless-billing-switchboard-1 --format '{{.RestartCount}}'"
   exit 1

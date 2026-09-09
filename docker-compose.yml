@@ -86,17 +86,14 @@ services:
   # no DATABASE_URL, so reactor + read model use directories under /app/.ph and
   # migrations run automatically at startup.
   switchboard:
-    # MUST match the reactor line the packages were built against. billing and
-    # paperless-sync target 6.2.2-dev.53; :latest is 6.2.2's predecessor 6.2.1,
-    # which does not define the AttachmentRef GraphQL type that billing's
-    # subgraph references. One unknown type fails composition for EVERY subgraph
-    # (including core ones like analytics and document-drive), the gateway ends
-    # up with no query root, and switchboard crash-loops on startup.
-    # Default is PINNED, not :dev -- :dev is a MOVING tag (it happened to equal
-    # v6.2.2-dev.68 when this was written, verified by identical manifest
-    # digest, but it advances on the next dev publish). Tags here are
-    # v-PREFIXED; a bare 6.2.2-dev.68 fails with "artifact not found".
-    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-v6.2.2-dev.68}
+    # :latest is the production line -- 6.2.2 as of this writing. It defines the
+    # AttachmentRef GraphQL type that billing's subgraph references; 6.2.1 and
+    # earlier did not, and one unknown type fails supergraph composition for
+    # EVERY subgraph (including core ones like analytics and document-drive),
+    # leaving the gateway with no query root and switchboard crash-looping.
+    # Pin PH_IMAGE_TAG to a v-PREFIXED tag (e.g. v6.2.2) to hold a version; a
+    # bare 6.2.2 fails with "artifact not found".
+    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-latest}
     restart: unless-stopped
     ports:
       - "127.0.0.1:${SWITCHBOARD_HOST_PORT:-4001}:3000"
@@ -157,7 +154,7 @@ services:
 
   connect:
     # Same reactor line as switchboard -- Connect loads the same packages.
-    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-v6.2.2-dev.68}
+    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       switchboard:
