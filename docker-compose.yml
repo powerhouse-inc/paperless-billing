@@ -108,17 +108,9 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${SWITCHBOARD_HOST_PORT:-4001}:3000"
-    # TEMPORARY: patches a broken @apollo/subgraph in the image before handing
-    # off to the real entrypoint. Without it EVERY graphql subgraph is dropped,
-    # the supergraph has no query root, /graphql 404s and bootstrap fails --
-    # while /health still answers, so the container looks healthy. See the
-    # script header. Remove both lines (and the script) once the image is newer
-    # than v6.2.2-dev.68, which carries the upstream fix.
-    entrypoint: ["/bin/sh", "/patch-apollo-subgraph.sh"]
     volumes:
       # Persists .ph/reactor-storage and .ph/read-storage (WORKDIR is /app).
       - switchboard_pglite:/app/.ph
-      - ./scripts/patch-apollo-subgraph.sh:/patch-apollo-subgraph.sh:ro
     environment:
       # Installed by the entrypoint at every container start, BY TARBALL URL --
       # deliberately not `name@version`.
