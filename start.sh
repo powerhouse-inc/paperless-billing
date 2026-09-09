@@ -35,7 +35,54 @@ if [ "$OS" = "Linux" ] && grep -qi microsoft /proc/version 2>/dev/null; then IS_
 fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 # --- preflight ----------------------------------------------------------------
-command -v docker >/dev/null 2>&1 || fail "Docker is not installed. https://docs.docker.com/engine/install/"
+# Not `fail`: the one-line form pointed everyone at docs.docker.com/engine/install,
+# which is the LINUX engine page -- unhelpful on a Mac, where the answer is a
+# desktop runtime, and actively wrong on Apple Silicon, where the emulation
+# setting decides whether this demo is usable at all.
+if ! command -v docker >/dev/null 2>&1; then
+  printf '\nERROR: Docker is not installed.\n\n' >&2
+  if [ "$OS" = "Darwin" ]; then
+    cat >&2 <<'EOF'
+On macOS, install OrbStack (recommended):
+
+  brew install --cask orbstack && open -a OrbStack
+
+It provides docker and Compose v2, and it needs no privileged helper -- so it
+cannot hit the macOS "Malware Blocked / com.docker.vmnetd" false positive that
+leaves Docker Desktop unable to start.
+
+Docker Desktop also works:
+
+  brew install --cask docker-desktop && open -a Docker
+EOF
+    if [ "$(uname -m)" = "arm64" ]; then
+      cat >&2 <<'EOF'
+
+Apple Silicon: switchboard and connect are published for linux/amd64 only (see
+the platform: pins in docker-compose.yml), so they run emulated here. OrbStack
+routes that through Rosetta automatically. On Docker Desktop you must turn it on
+yourself, before the first run -- Settings -> General -> "Use Rosetta for
+x86_64/amd64 emulation" -- or it falls back to the much slower QEMU path.
+EOF
+    fi
+    cat >&2 <<'EOF'
+
+OrbStack is free for personal use; commercial use needs a paid licence.
+EOF
+  elif [ "$IS_WSL" = 1 ]; then
+    cat >&2 <<'EOF'
+In WSL2, install Docker Desktop on Windows, then enable integration for this
+distro: Settings -> Resources -> WSL Integration.
+https://www.docker.com/products/docker-desktop/
+EOF
+  else
+    cat >&2 <<'EOF'
+Install Docker Engine and the Compose v2 plugin:
+  https://docs.docker.com/engine/install/
+EOF
+  fi
+  exit 1
+fi
 # The docker CLI in a Docker Desktop WSL distro is a symlink into an iso9660
 # mount served from the Docker Desktop VM
 # (/mnt/wsl/docker-desktop/cli-tools). If Docker Desktop restarts while this
@@ -64,7 +111,38 @@ if ! docker --version >/dev/null 2>&1; then
   exit 1
 fi
 
-docker info >/dev/null 2>&1 || fail "Docker is installed but the daemon is not running."
+if ! docker info >/dev/null 2>&1; then
+  printf '\nERROR: Docker is installed but the daemon is not running.\n\n' >&2
+  if [ "$OS" = "Darwin" ]; then
+    cat >&2 <<'EOF'
+Start your runtime and wait for it to report ready:
+
+  OrbStack        open -a OrbStack
+  Docker Desktop  open -a Docker
+
+If Docker Desktop never becomes ready, look for a macOS "Malware Blocked"
+dialog naming com.docker.vmnetd. It is a false positive -- the helper is
+validly signed and notarized by Docker Inc, but XProtect blocks it and the
+daemon then never starts. Leftover helpers from an older Docker install make
+this much more likely. Clear them and relaunch:
+
+  sudo launchctl bootout system/com.docker.vmnetd
+  sudo launchctl bootout system/com.docker.socket
+  sudo rm -f /Library/PrivilegedHelperTools/com.docker.vmnetd \
+             /Library/PrivilegedHelperTools/com.docker.socket \
+             /Library/LaunchDaemons/com.docker.vmnetd.plist \
+             /Library/LaunchDaemons/com.docker.socket.plist
+
+Or switch to OrbStack, which installs no privileged helper and so cannot hit
+this at all.
+EOF
+  elif [ "$IS_WSL" = 1 ]; then
+    echo "Start Docker Desktop on Windows, then re-run this script." >&2
+  else
+    echo "Start it with:  sudo systemctl start docker" >&2
+  fi
+  exit 1
+fi
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is missing (the 'docker compose' subcommand)."
 command -v curl >/dev/null 2>&1 || fail "curl is required."
 

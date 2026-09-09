@@ -8,8 +8,21 @@ an LLM.
 
 ### Setup
 
-- Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- **Install a Docker runtime** — the demo needs `docker` plus Compose v2.
 
+  | Platform | Install                                                                          |
+  | -------- | -------------------------------------------------------------------------------- |
+  | macOS    | [OrbStack](https://orbstack.dev) — `brew install --cask orbstack`                |
+  | Linux    | [Docker Engine](https://docs.docker.com/engine/install/) + the Compose v2 plugin |
+  | Windows  | [Docker Desktop](https://www.docker.com/products/docker-desktop/), WSL2 backend  |
+
+  **On macOS, prefer OrbStack.** Two reasons, both specific to this demo:
+  1. `switchboard` and `connect` are published for `linux/amd64` only, so on an
+    M-series Mac they run emulated — that's what the `platform:` pins in
+     [docker-compose.yml](docker-compose.yml) are for. OrbStack routes emulation
+     through Rosetta automatically. Docker Desktop needs Rosetta switched on by
+     hand — **Settings → General → "Use Rosetta for x86_64/amd64 emulation"** —
+     or it falls back to the much slower QEMU path.
 - Clone this repository
 
 ```bash
@@ -17,12 +30,11 @@ git clone https://github.com/powerhouse-ai/paperless-billing.git
 cd paperless-billing
 ```
 
-- Get an AI API from your preffered LLM provider, and set it in the `.env` file with the model name. We use https://openrouter.ai in this demo.
+- Get an AI API from your preffered LLM provider, and set it in the `.env` file with the model name. We use [https://openrouter.ai](https://openrouter.ai) in this demo.
+
 
 
 ### Instructions
-
-
 
 ```bash
 cp .env.example .env      # fill in PAPERLESS_AI_API_KEY
@@ -36,11 +48,8 @@ Copy-Item .env.example .env   # fill in PAPERLESS_AI_API_KEY
 .\start.ps1
 ```
 
-
 First run pulls ~2.6 GB and installs the reactor packages, so give it a few  
 minutes. After that, start-up is quick.
-
-
 
 ### Where to access services:
 
