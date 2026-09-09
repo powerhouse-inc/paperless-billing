@@ -37,8 +37,7 @@ fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 # --- preflight ----------------------------------------------------------------
 # Not `fail`: the one-line form pointed everyone at docs.docker.com/engine/install,
 # which is the LINUX engine page -- unhelpful on a Mac, where the answer is a
-# desktop runtime, and actively wrong on Apple Silicon, where the emulation
-# setting decides whether this demo is usable at all.
+# desktop runtime (and, for Docker Desktop, the vmnetd false positive below).
 if ! command -v docker >/dev/null 2>&1; then
   printf '\nERROR: Docker is not installed.\n\n' >&2
   if [ "$OS" = "Darwin" ]; then
@@ -54,18 +53,6 @@ leaves Docker Desktop unable to start.
 Docker Desktop also works:
 
   brew install --cask docker-desktop && open -a Docker
-EOF
-    if [ "$(uname -m)" = "arm64" ]; then
-      cat >&2 <<'EOF'
-
-Apple Silicon: switchboard and connect are published for linux/amd64 only (see
-the platform: pins in docker-compose.yml), so they run emulated here. OrbStack
-routes that through Rosetta automatically. On Docker Desktop you must turn it on
-yourself, before the first run -- Settings -> General -> "Use Rosetta for
-x86_64/amd64 emulation" -- or it falls back to the much slower QEMU path.
-EOF
-    fi
-    cat >&2 <<'EOF'
 
 OrbStack is free for personal use; commercial use needs a paid licence.
 EOF

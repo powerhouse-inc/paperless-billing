@@ -16,17 +16,16 @@ an LLM.
   | Linux    | [Docker Engine](https://docs.docker.com/engine/install/) + the Compose v2 plugin |
   | Windows  | [Docker Desktop](https://www.docker.com/products/docker-desktop/), WSL2 backend  |
 
-  **On macOS, prefer OrbStack.** Two reasons, both specific to this demo:
-  1. `switchboard` and `connect` are published for `linux/amd64` only, so on an
-    M-series Mac they run emulated — that's what the `platform:` pins in
-     [docker-compose.yml](docker-compose.yml) are for. OrbStack routes emulation
-     through Rosetta automatically. Docker Desktop needs Rosetta switched on by
-     hand — **Settings → General → "Use Rosetta for x86_64/amd64 emulation"** —
-     or it falls back to the much slower QEMU path.
+  **On macOS, prefer OrbStack.** All the images this demo pulls are multi-arch,
+  so an M-series Mac runs the whole stack natively -- no Rosetta, no
+  emulation. OrbStack is still the better choice for one reason: it installs
+  no privileged helper, so it cannot hit the macOS "Malware Blocked /
+  com.docker.vmnetd" false positive that can leave Docker Desktop's daemon
+  unable to start at all (`start.sh` explains the cleanup if that happens).
 - Clone this repository
 
 ```bash
-git clone https://github.com/powerhouse-ai/paperless-billing.git
+git clone https://github.com/powerhouse-inc/paperless-billing.git
 cd paperless-billing
 ```
 
